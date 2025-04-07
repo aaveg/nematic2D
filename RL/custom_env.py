@@ -2,8 +2,8 @@ import numpy as np
 import gymnasium as gym
 # import time
 from gymnasium import spaces
-from cuPSS_server import cuPSS_server
-from utils import Renderer, DataHandler, find_interface
+from RL.cuPSS_server import cuPSS_server
+from RL.utils import Renderer, DataHandler, find_interface
 
 
 class cuPSS_env(gym.Env):
@@ -13,9 +13,6 @@ class cuPSS_env(gym.Env):
         self._s_name = env_config['sname']
         self.nx, self.ny = env_config['size']
         self.rmode = env_config['rmode']
-        self.activity_mode = "all" # "all" or "interface"
-        assert self.activity_mode in ["all", "interface"]
-
 
         # cuPSS related initializations
         self.cupss_channel_order = {0: "Qxx", 1: "Qxy", 2: "vx", 3: "vy", 4: "phi"}
@@ -23,10 +20,10 @@ class cuPSS_env(gym.Env):
 
         # environment options and configurations
         self.bins = self.ny
-        self.action_space = spaces.Box(low = 0, high = 5, shape = (self.bins,), dtype = np.float64)
-        self.observation_space = spaces.Box(low = -100, high = 100, shape = (3*self.bins, ), dtype = np.float64)
+        self.action_space = spaces.Box(low = 0, high = 2, shape = (1,), dtype = np.float64)
+        self.observation_space = spaces.Box(low = -100, high = 100, shape = (1,), dtype = np.float64)
         
-        self.steps_per_episode = 10000
+        self.steps_per_episode = 100
         self.trajectory_reward = 0
         self._steps = 0
 
@@ -49,13 +46,13 @@ class cuPSS_env(gym.Env):
         self.server.reset()
         data = self._initialize_env_state(seed = seed)
         observation = self.dhandle.get_obs(data) 
-        self._last_observation = observation
+        # self._last_observation = observation
         return observation, {'trajectory_reward': self.trajectory_reward}
 
 
     def step(self, action):
         self._curr_action = action
-        action_to_write = self.dhandle.action_preprocess(action, self._last_observation, mode = self.activity_mode)
+        action_to_write = action*np.ones((self.nx,self.ny))#self.dhandle.action_preprocess(action, self._last_observation, mode = self.activity_mode)
         self.server.write(action_to_write)
         self._steps += 1
 
@@ -66,13 +63,11 @@ class cuPSS_env(gym.Env):
 
         observation = self.dhandle.get_obs(obs_df)
         obs_df['observation'] = observation
-        self._last_observation = observation
-
         self.renderer.render(obs_df)
         # calculate reward based on the observation and the target  
-        reward = 0 #self.dhandle._calc_reward(obs_df)
+        reward = self.dhandle._calc_reward(obs_df)
         self.trajectory_reward += reward
-
+        # print(reward)
         # conditions for trunctions and termination.
         # ampl = max(observation[:self.bins])-min(observation[:self.bins])
         terminated: bool = False  # add a constraint that if interface fluctuations increase beyond a point terminate

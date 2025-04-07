@@ -61,10 +61,7 @@ class Renderer():
         self._channel_order = config['channel_order']
         self._bins = config['bin_size']
         self._n_channels = len(self._channel_order.keys())
-
-        # self.save_loc = '/home/aaveg/projects/env_config/'
-        # data render options and configurations
-        
+   
         self.avail_modes =  ['human', 'cli', 'none', None]
         assert self.mode in self.avail_modes
         self.screen = None
@@ -81,6 +78,9 @@ class Renderer():
         if self.mode == 'human':
             self._render_human(frame)
             return 0
+        if self.mode == 'plot':
+            self._render_plot(frame)
+            return 0
         
         if self.mode == 'none':
             return 0
@@ -90,11 +90,13 @@ class Renderer():
 
         return -1
 
+    def _render_plot(frame):
+        pass
+
     def _render_cli(frame):
         pass
 
     def _render_human(self,dataframe):
-        # assert self.nx == int(len(frame)**0.5) # check if true for non-square arrays
         scaled_nx = self.scale*self._nx
         scaled_ny = self.scale*self._ny
         num_disp =2
@@ -330,12 +332,20 @@ class DataHandler():
     #     # print(len(obs))
     #     return obs
 
+    # def get_obs(self, data, fields_in_order = ['Qxx','Qxy']):
+    #     outp = []
+    #     for field in fields_in_order:
+    #         outp.append(data['Qxx'].reshape(self._nx,self._ny))
+                    
+    #     obs = np.array(outp)
+    #     return obs
+    
     def get_obs(self, data):
-        Qxx = data['Qxx'].reshape(self._nx,self._ny)
-        Qxy = data['Qxy'].reshape(self._nx,self._ny)
-        
-        obs = np.array([Qxx,Qxy])
-        return obs
+        vx = data['vx']
+        vy = data['vy']
+        vel = np.sqrt(vx**2 + vy**2)
+        obs = np.mean(vel)
+        return np.array([obs])
     
     def normalize_obs(self, obs):
         obs = obs/self._ny
@@ -443,27 +453,17 @@ class DataHandler():
 
     #     return reward
 
-    def _calc_reward(self, obs ):
+    def _calc_reward(self, obs, setpoint = 0.7 ):
         obs_state = obs['observation'] 
-        obs_int = obs_state[:self._bins] 
-
-        obs_rfft = np.fft.rfft(obs_int, norm = 'forward')
-        obs_rfft_mag = np.abs(obs_rfft)
-
-        target_rfft_mag = np.zeros_like(obs_rfft_mag)
-        target_rfft_mag[0] = 0.5
-        target_rfft_mag[2] = 0.02
-
-        diff = target_rfft_mag - obs_rfft_mag
+        target_state = setpoint
+        diff = target_state - obs_state
         mse = diff.dot(diff)
         # print('mse - ', mse)
 
         b1 = 1
-        a1 = 10000
+        a1 = 1
         reward = b1*np.exp(-a1*mse)  
         # print(mse,reward)
 
-        # action = obs['action_out']
-        # reward = -action.dot(action)
 
         return reward

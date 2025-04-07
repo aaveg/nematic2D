@@ -1,0 +1,21 @@
+writer connected to: runs/cupss__cleanrl_nematic__1__1742542202
+using device cuda
+Compiling cuPSS server with user defined parameters...
+Box(-inf, inf, (1,), float64)
+Traceback (most recent call last):
+  File "/home/aaveg/projects/nematic2D/cleanrl_nematic.py", line 216, in <module>
+    next_obs, _ = envs.reset(seed=args.seed)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/aaveg/miniconda3/envs/ml/lib/python3.12/site-packages/gymnasium/vector/sync_vector_env.py", line 189, in reset
+    self._observations = concatenate(
+                         ^^^^^^^^^^^^
+  File "/home/aaveg/miniconda3/envs/ml/lib/python3.12/functools.py", line 907, in wrapper
+    return dispatch(args[0].__class__)(*args, **kw)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/aaveg/miniconda3/envs/ml/lib/python3.12/site-packages/gymnasium/vector/utils/space_utils.py", line 397, in _concatenate_base
+    return np.stack(items, axis=0, out=out)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/aaveg/miniconda3/envs/ml/lib/python3.12/site-packages/numpy/core/shape_base.py", line 456, in stack
+    return _nx.concatenate(expanded_arrays, axis=axis, out=out,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Output array has wrong dimensionality

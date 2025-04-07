@@ -56,6 +56,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"using device {device}")
 
 data = np.load('data/data_a_05.npy').astype(np.float32)
+print(data.shape)
 data = data[100:,]
 input_tensor = torch.from_numpy(data).to(device)
 # dataloader = DataLoader(data, batch_size=512, shuffle=False)

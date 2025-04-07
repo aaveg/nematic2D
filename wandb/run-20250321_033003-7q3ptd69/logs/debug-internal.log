@@ -1,0 +1,17 @@
+{"time":"2025-03-21T03:30:03.234463488-04:00","level":"INFO","msg":"stream: starting","core version":"0.19.8","symlink path":"/home/aaveg/projects/nematic2D/wandb/run-20250321_033003-7q3ptd69/logs/debug-core.log"}
+{"time":"2025-03-21T03:30:05.270880821-04:00","level":"INFO","msg":"created new stream","id":"7q3ptd69"}
+{"time":"2025-03-21T03:30:05.270906276-04:00","level":"INFO","msg":"stream: started","id":"7q3ptd69"}
+{"time":"2025-03-21T03:30:05.270964287-04:00","level":"INFO","msg":"writer: Do: started","stream_id":"7q3ptd69"}
+{"time":"2025-03-21T03:30:05.270987337-04:00","level":"INFO","msg":"handler: started","stream_id":"7q3ptd69"}
+{"time":"2025-03-21T03:30:05.271004075-04:00","level":"INFO","msg":"sender: started","stream_id":"7q3ptd69"}
+{"time":"2025-03-21T03:30:05.554336774-04:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-03-21T03:30:05.578802083-04:00","level":"ERROR","msg":"error getting latest commit","error":"exit status 128"}
+{"time":"2025-03-21T03:30:10.14207088-04:00","level":"INFO","msg":"stream: closing","id":"7q3ptd69"}
+{"time":"2025-03-21T03:30:10.142659703-04:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-03-21T03:30:10.143320858-04:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-03-21T03:30:15.722984755-04:00","level":"INFO","msg":"tensorboard: no root directory after 10 seconds, using working directory"}
+{"time":"2025-03-21T03:30:16.070291389-04:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-03-21T03:30:16.215792809-04:00","level":"INFO","msg":"handler: closed","stream_id":"7q3ptd69"}
+{"time":"2025-03-21T03:30:16.215839916-04:00","level":"INFO","msg":"sender: closed","stream_id":"7q3ptd69"}
+{"time":"2025-03-21T03:30:16.215837322-04:00","level":"INFO","msg":"writer: Close: closed","stream_id":"7q3ptd69"}
+{"time":"2025-03-21T03:30:16.215887649-04:00","level":"INFO","msg":"stream: closed","id":"7q3ptd69"}

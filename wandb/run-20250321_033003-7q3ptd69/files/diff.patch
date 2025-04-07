@@ -1,0 +1,750 @@
+diff --git a/cuPSS_server.py b/cuPSS_server.py
+deleted file mode 100644
+index 851ef5c..0000000
+--- a/cuPSS_server.py
++++ /dev/null
+@@ -1,81 +0,0 @@
+-import subprocess
+-import numpy as np
+-
+-## compile command '     nvcc nematic.cu -lcufft -lfftw3f -lcurand -lcupss -O2 -I/home/aaveg/cuPSS/inc -o nematic   '
+-
+-class cuPSS_server(object):
+-    def __init__(self, server_name) -> None:
+-        self.server_name = server_name
+-
+-        # _process is the instance of the current process
+-        self._process = None
+-        self._pname = None
+-        assert self.compile(), "error while compiling. server name used: {}".format(server_name)
+-
+-
+-    def compile(self):
+-        # compile cuPSS .cpp file
+-        self._pname =  self.server_name.split('.')[0]
+-        # print(self._pname)
+-        print("Compiling cuPSS server with user defined parameters...")
+-
+-        try:
+-            subprocess.run(['nvcc', self.server_name,  '-lcufft', '-lfftw3f', '-lcurand', '-lcupss', '-O2', '-I/home/aaveg/cuPSS/inc', '-o', self._pname],
+-                            capture_output = True,
+-                            check = True,
+-                            text = True
+-                            )
+-        except subprocess.CalledProcessError as e:
+-            print('Error while compiling cuPSS solver. ')
+-            print(e.stderr)
+-            return None
+-
+-        return True
+-
+-    def run(self):
+-        self._process = self._run_instance()
+-        assert self._clean_cupss_intro(), 'Did not receive the "begin" command'
+-        return True
+-
+-    def write(self, data_in):
+-        # val = '{}\n'.format(data_in)
+-        # self.process.stdin.write(val.encode())
+-        np.savetxt(self._process.stdin,data_in)
+-        # print(data_in, data_in.dtype)
+-        self._process.stdin.flush()
+-
+-    def read(self):
+-        data =  self._process.stdout.readline().strip().decode()
+-        # print(data)
+-        return data 
+-
+-    def reset(self):
+-        if self._process is not None:
+-            self._process.terminate()
+-            self._process.wait()
+-        assert self.run()
+-
+-    def close(self):
+-        print('closing connection to cuPSS server')
+-        if self._process is not None:
+-            self._process.terminate()
+-
+-    def _run_instance(self):
+-        assert self._pname is not None, "process name (_pname) was set. Should be defined during self.compile()"
+-        process = subprocess.Popen([self._pname], 
+-                                  stdout = subprocess.PIPE, 
+-                                  stdin  = subprocess.PIPE,
+-                                  stderr = None
+-                                  )
+-        # print(process.returncode)
+-        return process
+-    
+-    def _clean_cupss_intro(self):
+-        for _ in range(200):
+-            intro = self.read()
+-            # print(intro)
+-            if intro == 'begin': 
+-                return True
+-            
+-        self.close()
+-        return False
+diff --git a/custom_env.py b/custom_env.py
+deleted file mode 100644
+index 3795f15..0000000
+--- a/custom_env.py
++++ /dev/null
+@@ -1,122 +0,0 @@
+-import numpy as np
+-import gymnasium as gym
+-# import time
+-from gymnasium import spaces
+-from cuPSS_server import cuPSS_server
+-from utils import Renderer, DataHandler, find_interface
+-
+-
+-class cuPSS_env(gym.Env):
+-    def __init__(self, env_config ) -> None:
+-        super().__init__()
+-
+-        self._s_name = env_config['sname']
+-        self.nx, self.ny = env_config['size']
+-        self.rmode = env_config['rmode']
+-        self.activity_mode = "all" # "all" or "interface"
+-        assert self.activity_mode in ["all", "interface"]
+-
+-
+-        # cuPSS related initializations
+-        self.cupss_channel_order = {0: "Qxx", 1: "Qxy", 2: "vx", 3: "vy", 4: "phi"}
+-        self.n_channels = len(self.cupss_channel_order.keys())
+-
+-        # environment options and configurations
+-        self.bins = self.ny
+-        self.action_space = spaces.Box(low = 0, high = 5, shape = (self.bins,), dtype = np.float64)
+-        self.observation_space = spaces.Box(low = -100, high = 100, shape = (3*self.bins, ), dtype = np.float64)
+-        
+-        self.steps_per_episode = 10000
+-        self.trajectory_reward = 0
+-        self._steps = 0
+-
+-        # Handles render configs and functions 
+-        render_conf = {'size': (self.nx, self.ny), 'channel_order': self.cupss_channel_order, 'fps': 50, 'bin_size': self.bins}
+-        self.renderer = Renderer(self.rmode, render_conf)
+-
+-        # Handles data processing and analysis functions 
+-        data_handler_config = {'size': (self.nx, self.ny), 'channel_order': self.cupss_channel_order, 'bin_size': self.bins}
+-        self.dhandle = DataHandler(data_handler_config)
+-
+-        # Handles interaction with cupss 
+-        self.server = cuPSS_server(server_name = self._s_name) 
+-
+-
+-
+-    def reset(self, seed = 42, options = None): 
+-        self._steps = 0
+-        self.trajectory_reward = 0
+-        self.server.reset()
+-        data = self._initialize_env_state(seed = seed)
+-        observation = self.dhandle.get_obs(data) 
+-        self._last_observation = observation
+-        return observation, {'trajectory_reward': self.trajectory_reward}
+-
+-
+-    def step(self, action):
+-        self._curr_action = action
+-        action_to_write = self.dhandle.action_preprocess(action, self._last_observation, mode = self.activity_mode)
+-        self.server.write(action_to_write)
+-        self._steps += 1
+-
+-        # read the response from cuPSS server and render the observed data
+-        obs_df = self.dhandle.extract(self.server.read())
+-        obs_df['action'] = action_to_write
+-        obs_df['action_out'] = self._curr_action 
+-
+-        observation = self.dhandle.get_obs(obs_df)
+-        obs_df['observation'] = observation
+-        self._last_observation = observation
+-
+-        self.renderer.render(obs_df)
+-        # calculate reward based on the observation and the target  
+-        reward = 0 #self.dhandle._calc_reward(obs_df)
+-        self.trajectory_reward += reward
+-
+-        # conditions for trunctions and termination.
+-        # ampl = max(observation[:self.bins])-min(observation[:self.bins])
+-        terminated: bool = False  # add a constraint that if interface fluctuations increase beyond a point terminate
+-        truncated: bool  = True if self._steps > self.steps_per_episode else False  
+-        info = {'trajectory_reward': self.trajectory_reward}
+-        info.update(obs_df)
+-
+-        return observation, reward, terminated, truncated, info
+-
+-
+-    def _initialize_env_state(self, seed):
+-        data = self.dhandle.generate_init_state(seed = seed)
+-        for i in range(self.n_channels):
+-            field = data[self.cupss_channel_order[i]]
+-            self.server.write(field)
+-
+-        return data
+-        
+-
+-    def close(self):
+-        self.server.close()
+-
+-
+-
+-# class cuPSS_env(gym.Env):
+-#     def __init__(self, env_config ) -> None:
+-#         self.bins = 16
+-#         self.action_space = spaces.Box(low = 0, high = 1, shape = (self.bins,), dtype = np.float64)
+-#         self.observation_space = spaces.Box(low = 0.2, high = 0.8, shape = (self.bins, ), dtype = np.float64)
+-        
+-
+-
+-#     def reset(self, seed = 42, options = None): 
+-#         observation = self.observation_space.sample() 
+-#         return observation, {'trajectory_reward': 0}
+-
+-
+-#     def step(self, action):
+-#         observation = self.observation_space.sample()
+-#         reward = 0
+-#         terminated: bool = False  # add a constraint that if interface fluctuatioons increase beyond a point terminate
+-#         truncated: bool  = False  
+-#         info = {'trajectory_reward': 0}
+- 
+-#         return observation, reward, terminated, truncated, info
+-
+-
+diff --git a/nematic b/nematic
+index 64b1c50..c2a18c1 100755
+Binary files a/nematic and b/nematic differ
+diff --git a/random_action.py b/random_action.py
+index ae7f4d6..48f3a7a 100644
+--- a/random_action.py
++++ b/random_action.py
+@@ -1,4 +1,4 @@
+-from custom_env import cuPSS_env
++from RL.custom_env import cuPSS_env
+ import numpy as np
+ import torch
+ import matplotlib.pyplot as plt
+@@ -11,10 +11,10 @@ from dataclasses import dataclass
+ @dataclass
+ class Args:
+     size: tuple = (128,128)
+-    sname: str = '/home/aaveg/projects/conv/nematic.cu'
++    sname: str = '/home/aaveg/projects/nematic2D/RL/nematic2D_pbc.cu'
+     save: str = 'data_a_02.pt'
+-    action_amp: float = 0.5
+-    rmode: str = "none"
++    action_amp: float = 0.7
++    rmode: str = "human"
+     seed: int = 42
+     cuda: bool = True
+ 
+@@ -22,8 +22,8 @@ class Args:
+ if __name__ == "__main__": 
+     args = tyro.cli(Args)
+     env = cuPSS_env(env_config= {"sname": args.sname, 'size': args.size, 'rmode': args.rmode })
+-    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+-    print('Model is using the device: ', device)
++    # device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
++    # print('Model is using the device: ', device)
+ 
+ 
+     num_episodes = 1
+@@ -35,6 +35,7 @@ if __name__ == "__main__":
+         while not done:
+             action = args.action_amp*np.ones_like(env.action_space.sample())
+             observation, reward, terminated, truncated, info = env.step(action)
++            print(observation)
+             data.append(observation)
+             done = terminated or truncated
+             if done:
+@@ -44,9 +45,9 @@ if __name__ == "__main__":
+     env.close()
+     data = np.array(data)
+     print(data.shape)
+-    fname_append = args.action_amp*10
+-    np.save(f'data/data_a_{fname_append:02.0f}.npy', data)
+-    print(f'data saved to file: data/data_a_{fname_append:02.0f}.npy')
++    # fname_append = args.action_amp*10
++    # np.save(f'data/data_a_{fname_append:02.0f}.npy', data)
++    # print(f'data saved to file: data/data_a_{fname_append:02.0f}.npy')
+ 
+     # t = torch.from_numpy(data)
+     # print(t.shape)
+diff --git a/utils.py b/utils.py
+deleted file mode 100644
+index eca7384..0000000
+--- a/utils.py
++++ /dev/null
+@@ -1,469 +0,0 @@
+-import pygame
+-import numpy as np
+-import json
+-# from utils import *
+-import matplotlib as mpl
+-from pprint import pprint
+-
+-def coarse_grain(arr,binr=128,binc=128):
+-    rows,columns =  arr.shape
+-    return arr.reshape(binr,rows//binr, binc, columns//binc).sum(3).sum(1)
+-
+-def compute_n(Qxx,Qxy):
+-    S = 2*np.sqrt( Qxx**2 + Qxy**2)
+-    Qxx = Qxx/(S+0.0001)
+-    Qxy = Qxy/(S+0.0001)
+-    # Evaluate nx and ny from normalized Qxx and Qxy
+-    nx = np.sqrt( Qxx + 0.5 )
+-    ny = Qxy / (nx+0.0001) # This ensures ny>0, such that theta lies between 0 to pi
+-    # nx = nx * sign( Qxy ) # This gives back nx its correct sign.
+-    return (S, nx, ny)
+-
+-
+-def find_interface(mat, size, dcol = 1, edge_val =0):
+-    assert type(mat) == np.ndarray
+-    nx,ny = size
+-    mat = mat.reshape((nx,ny))
+-    # mat =  mat.transpose()
+-
+-    # search between the 25% and 75% of the visible area
+-    low, high = 0.25, 0.75
+-    lrow,hrow = int(low*nx), int(high*nx)
+-    # edge = []
+-    interface = []
+-    coords = []
+-    for col in range(0,ny,dcol):
+-        temp = []
+-        for row in range(lrow,hrow):
+-            # find the edge location 
+-            if edge_val-0.2 < mat[row][col] < edge_val+0.2:
+-                temp.append(row)
+-        if len(temp)==0:
+-            temp = [lrow]
+-
+-        pos = sum(temp)/len(temp)
+-        interface.append(pos)
+-        coords.append((col,pos))
+-    interface = np.array(interface)
+-    coords = np.array(coords)
+-    # interface_rfft = np.fft.rfft(interface, norm = 'forward')
+-    # print("fft interface -> ", edge_rfft)
+-    return interface, coords  
+-
+-
+-class Renderer():
+-    def __init__(self, mode, config) -> None:
+- 
+-        self.mode = mode
+-        self.config = config
+-
+-        self._nx, self._ny = config['size']
+-        self._channel_order = config['channel_order']
+-        self._bins = config['bin_size']
+-        self._n_channels = len(self._channel_order.keys())
+-
+-        # self.save_loc = '/home/aaveg/projects/env_config/'
+-        # data render options and configurations
+-        
+-        self.avail_modes =  ['human', 'cli', 'none', None]
+-        assert self.mode in self.avail_modes
+-        self.screen = None
+-        self.clock = None
+-        self.scale = 3
+-        self.count = 0
+-        
+-
+-    def render(self, frame = None):
+-        if self.mode == 'cli':
+-            self._render_cli(frame)
+-            return 0
+-        
+-        if self.mode == 'human':
+-            self._render_human(frame)
+-            return 0
+-        
+-        if self.mode == 'none':
+-            return 0
+-        
+-        if self.mode is None:
+-            return 0
+-
+-        return -1
+-
+-    def _render_cli(frame):
+-        pass
+-
+-    def _render_human(self,dataframe):
+-        # assert self.nx == int(len(frame)**0.5) # check if true for non-square arrays
+-        scaled_nx = self.scale*self._nx
+-        scaled_ny = self.scale*self._ny
+-        num_disp =2
+-
+-        if self.screen is None:
+-            pygame.init()
+-            pygame.display.init()
+-            self.screen = pygame.display.set_mode((scaled_nx, num_disp*scaled_ny),pygame.RESIZABLE) #set size according to the simulation
+-            
+-        if self.clock is None:
+-            self.clock = pygame.time.Clock()
+-
+-        # build the surfaces and set transparency levels
+-        surf_phi = self._array2surf(dataframe['phi'], limits = (-1,1), colormap = 'bwr')
+-        # print(dataframe['phi'].reshape((self._nx,self._ny)))
+-        surf_activity = self._array2surf(dataframe['action'], limits = (0,1), colormap = 'gray')
+-        surf_activity.set_alpha(255)
+-        surf_nematic = self._draw_nematic(dataframe['Qxx'], dataframe['Qxy'], color = 'white')
+-
+-        # render surfaces on screen in desired order 
+-        self.screen.blit(surf_phi, (0, 0))
+-        self.screen.blit(surf_activity, (0, scaled_ny))
+-        self.screen.blit(surf_nematic, (0, 0))
+-
+-        # draw the interface with a black line
+-        # interface_coords = self.scale*find_interface(dataframe['phi'], size = (self._nx,self._ny), dcol = self._ny//self._bins)[1]
+-        # interface_coords[:,1] = self.scale*self._ny - interface_coords[:,1]
+-        # pygame.draw.lines(self.screen,'black',closed = False, points = interface_coords, width = 2)
+-        # surf_nematic = pygame.transform.flip(surf_nematic,flip_x = False, flip_y = True)
+-
+-        # print(interface_coords)
+-        # refresh surface
+-        self.clock.tick(self.config["fps"])
+-        # self.screen = pygame.transform.flip(self.screen,flip_x = True, flip_y =False)
+-        pygame.display.flip()
+-        # pygame.image.save(self.screen,'data/t{0:03d}.jpeg'.format(self.count))
+-        # self.count+=1
+-
+-        # Handle events in pygame window. 
+-        pygame.event.pump()
+-        for event in pygame.event.get(): 
+-            if event.type == pygame.KEYDOWN:
+-                if event.key == pygame.K_s:
+-                    self.save_config(dataframe.copy())
+-            if event.type == pygame.QUIT: 
+-                pygame.quit()
+-                # add a kill signal for the environment to know that renderer ha exited
+-                exit()
+-
+-    def _array2surf(self, frame, limits = 'auto', colormap = 'gray'):
+-        if limits == 'auto':
+-            limits = (frame.min(),frame.max())
+-        assert limits[0] <= limits[1] 
+-
+-        frame = np.reshape(frame, (self._nx,self._ny)).T
+-        frame = (frame - limits[0])/(limits[1]-limits[0]+0.0001)
+-        # frame = np.rot90(frame, k=1)
+-        # print(frame)
+-        frame = 255*self.colorize(frame, colormap)
+-
+-        surf = pygame.surfarray.make_surface(frame) 
+-
+-        scaled_nx = self.scale*self._nx
+-        scaled_ny = self.scale*self._ny
+-        surf = pygame.transform.scale(surf,(scaled_nx,scaled_ny)) 
+-        
+-
+-        return pygame.transform.flip(surf,flip_x = False, flip_y = True)
+-
+-
+-    def _draw_nematic(self, Qxx, Qxy, color = 'black'):
+-        # Qxx = np.rot90(np.reshape( Qxx, (self._nx,self._ny) ) , k=1)
+-        # Qxy = np.rot90(np.reshape( Qxy, (self._nx,self._ny) )  , k=1)
+-        Qxx = np.reshape( Qxx, (self._nx,self._ny) ).T
+-        Qxy = np.reshape( Qxy, (self._nx,self._ny) ).T
+-
+-        scaled_nx = self.scale*self._nx
+-        scaled_ny = self.scale*self._ny
+-        surf = pygame.Surface((scaled_nx,scaled_ny),flags=pygame.SRCALPHA)
+-        surf.fill(pygame.Color(0,0,0,0))
+-
+-        gap = 4
+-        for i in range(0, self._nx, gap):
+-            for j in range(0, self._ny, gap):
+-                s,nx,ny = compute_n(Qxx[i,j],Qxy[i,j])
+-                if s<0.2:
+-                    continue
+-                r = i*self.scale
+-                c = j*self.scale
+-                l = 1*self.scale # l is the length scaling for nematic lines and 2.5 value visually looks good when plotting (can be chosen arbitrarily). 
+-                pygame.draw.line(surf, color, (r - l*s*nx, c - l*s*ny),(r + l*s*nx, c + l*s*ny), width=2)
+-
+-        return pygame.transform.flip(surf,flip_x = False, flip_y = True)
+-    
+-
+-    def save_config(self, data):
+-        pass
+-        # for k in data.keys():
+-        #     data[k] = data[k].tolist()
+-        # print('Saving environment configuration...')
+-        # with open(self.save_loc + "env_target.json", 'w') as f:
+-        #     json.dump(data,f)
+-        # print('Configuration saved')
+-
+-
+-    def colorize(self, arr, colormap):
+-        """
+-        genrates grayscale to RGB Mapping of an numpy ndarray.
+-        Input: (n,n) numpy.ndarray 
+-        Output: (n,n,3) numpy.ndarray   
+-        """
+-        assert type(arr) == np.ndarray
+-        temp = mpl.colormaps[colormap](arr) # creates RGBA channels 
+-        # Return only RGB channels and remove the Alpha channel
+-        return temp[:,:,0:3] 
+-
+-
+-
+-
+-
+-
+-class DataHandler():
+-    def __init__(self, config ) -> None:
+-        self._nx, self._ny = config['size']
+-        self.channel_order = config['channel_order']
+-        self._bins = config['bin_size']
+-
+-        # self.save_loc = '/home/aaveg/projects/env_config/'
+-        # self._target = self._load_target(fname = self.save_loc + "env_target.json")     
+-
+-    # def _load_target(self,fname):
+-    #     with open(fname, 'r') as fp:
+-    #         target = json.load(fp)
+-    #     for field in target.keys():
+-    #         target[field] = np.array(target[field])
+-    #     return target
+-
+-    def generate_init_state(self, seed = 42):
+-        rng = np.random.default_rng(seed = seed)
+-
+-        angle_radians = np.pi/3 
+-        nx_ = np.cos(angle_radians)
+-        ny_ = np.sin(angle_radians)
+-        Qxx = (nx_*nx_ - 0.5) + (2*rng.random((self._nx, self._ny)) -1)
+-        Qxy = nx_*ny_ + (2*rng.random((self._nx, self._ny)) -1)
+-
+-        vx = np.zeros((self._nx, self._ny))
+-        vy = np.zeros((self._nx, self._ny))
+-        
+-        phi = np.zeros((self._nx, self._ny)) 
+-        # phi[:,:self._ny//2] = -1.0
+-        phi[:self._nx//2,:] = 1.0
+-        phi[self._nx//2 + 1:,:] = 1#-1.0
+-         # phi[:,1+self._ny//2:] = 1.0 
+-        
+-        output = {'Qxx':Qxx, 'Qxy': Qxy, 'vx': vx, 'vy': vy, 'phi': phi }
+-        return output 
+-     
+-        
+-    def extract(self, rawdata):
+-        if len(rawdata) == 0:
+-            # self.reset()
+-            return {}
+-
+-        n_channels = len(self.channel_order.keys())
+-        data = rawdata.split(' ')
+-        n = len(data[0].split('&'))
+-        # print("n --->  ", data)
+-        assert n == n_channels, "recieved data: " + rawdata
+-        
+-        data_processed = {}
+-        for k in range(n_channels):
+-            channel_name = self.channel_order[k]
+-            data_processed[channel_name] = []
+-
+-        for i in data:
+-            vals = i.split('&')
+-            for j in range(n_channels):
+-                channel_name = self.channel_order[j]
+-                data_processed[channel_name].append(float(vals[j]))
+-
+-        # print(data_processed['phi'].min(),data_processed['phi'].max())
+-
+-        for k in data_processed.keys():
+-            data_processed[k] = np.array(data_processed[k])
+-    
+-        return data_processed
+-
+-    def action_preprocess(self,action, interface, mode):
+-        interface = interface[:self._bins]
+-        rep = self._ny/self._bins
+-        assert int(rep) == rep, "action dimension should be divisible ny"
+-        rep = int(rep)
+-        # print("hereeeee")
+-        temp = np.repeat(action, rep)
+-        action_mat = np.tile(temp,(self._nx,1))
+-        if mode == "all":
+-            return action_mat
+-        elif mode == "interface":
+-
+-            coord_r = np.repeat(self.denormalize_obs(interface), rep)
+-            coord_c = np.arange(0,self._ny)
+-
+-            # print(coord_r, coord_c)
+-            action_to_write = np.zeros(action_mat.shape)
+-            for i in range(-20,5):
+-                action_to_write[coord_r+i, coord_c] = action_mat[coord_r, coord_c]
+-
+-            # action_mat = np.transpose(action_mat)
+-            # action_to_write = np.transpose(action_to_write)
+-            action_to_write = action_to_write[::1,:]
+-            action_to_write = action_to_write.flatten()
+-            return action_to_write
+-        else:
+-            raise ValueError(f"action mode should be either 'all' or 'interface'. mode value provided is {mode}")
+-
+-
+-
+-    # def get_obs(self, data):
+-    #     field = data['phi']
+-    #     temp = find_interface(field, size = (self._nx,self._ny), dcol = self._ny//self._bins)
+-    #     interface = temp[0]
+-    #     interface_norm = self.normalize_obs(interface)
+-        
+-    #     vx = np.reshape(data['vx'],(self._nx, self._ny))#.transpose()
+-    #     vy = np.reshape(data['vy'],(self._nx, self._ny))#.transpose()
+-        
+-    #     interface = interface.astype(int)
+-    #     interface_vx = vx[interface, np.arange(0,self._ny, self._ny//self._bins)]
+-    #     interface_vy = vy[interface, np.arange(0,self._ny, self._ny//self._bins)]
+-        
+-    #     obs = np.hstack((interface_norm, interface_vx, interface_vy))
+-    #     # print(len(obs))
+-    #     return obs
+-
+-    def get_obs(self, data):
+-        Qxx = data['Qxx'].reshape(self._nx,self._ny)
+-        Qxy = data['Qxy'].reshape(self._nx,self._ny)
+-        
+-        obs = np.array([Qxx,Qxy])
+-        return obs
+-    
+-    def normalize_obs(self, obs):
+-        obs = obs/self._ny
+-        return obs
+-        
+-
+-    def denormalize_obs(self, n_obs):
+-        obs = (n_obs*self._ny).astype(int)
+-        return obs
+-
+-    # # reward in real space
+-    # def _calc_reward(self, obs ):
+-    #     target = self._load_target(fname = self.save_loc + "env_target.json")
+-    #     target_state = self.get_obs(target)
+-    #     obs_state = obs['observation'] 
+-    #     # print(target_state,0*obs_state+0.5)
+-    #     diff = target_state - obs_state
+-    #     mse = diff.dot(diff)
+-
+-    #     b1 = 1
+-    #     a1 = 64
+-    #     reward = b1*np.exp(-a1*mse)  
+-
+-    #     return reward
+-
+-    # # reward in fft space
+-    # def _calc_reward(self, obs ):
+-    #     target = self._load_target(fname = self.save_loc + "env_target.json")
+-    #     target_state = self.get_obs(target)
+-    #     obs_state = obs['observation'] 
+-
+-    #     target_rfft = np.fft.rfft(target_state, norm = 'forward')
+-    #     target_rfft_mag = np.abs(target_rfft)
+-
+-    #     obs_rfft = np.fft.rfft(obs_state, norm = 'forward')
+-    #     obs_rfft_mag = np.abs(obs_rfft)
+-
+-    #     # print(target_rfft_mag, obs_rfft_mag)
+-
+-    #     diff = target_rfft_mag - obs_rfft_mag
+-    #     mse = diff.dot(diff)
+-    #     # print('mse - ', mse)
+-
+-    #     b1 = 1
+-    #     a1 = 10000
+-    #     reward = b1*np.exp(-a1*mse)  
+-
+-    #     return reward
+-
+-
+-    # def _calc_reward(self, obs ):
+-    #     target = self._load_target(fname = self.save_loc + "env_target.json")
+-    #     target_state = self.get_obs(target)
+-    #     # print(target_state)
+-    #     obs_state = obs['observation'] 
+-
+-    #     target_rfft = np.fft.rfft(target_state, norm = 'forward')
+-    #     target_rfft_mag = np.abs(target_rfft)
+-
+-    #     obs_rfft = np.fft.rfft(obs_state, norm = 'forward')
+-    #     obs_rfft_mag = np.abs(obs_rfft)
+-
+-    #     # print(target_rfft_mag, obs_rfft_mag)
+-    #     # print(target_rfft_mag)
+-    #     target_rfft_mag = np.zeros_like(obs_rfft_mag)
+-    #     target_rfft_mag[0] = 0.5
+-    #     target_rfft_mag[2] = 0.02
+-
+-    #     diff = target_rfft_mag - obs_rfft_mag
+-    #     mse = diff.dot(diff)
+-    #     # print('mse - ', mse)
+-
+-    #     b1 = 1
+-    #     a1 = 10000
+-    #     reward = b1*np.exp(-a1*mse)  
+-    #     print(mse,reward)
+-
+-    #     # action = obs['action_out']
+-    #     # reward = -action.dot(action)
+-
+-    #     return reward
+-
+-    # def _calc_reward(self, obs ):
+-    #     obs_state = obs['observation'] 
+-    #     obs_int = obs_state[:self._bins] 
+-    #     obs_vx = obs_state[self._bins:2*self._bins]
+-
+-    #     reward = obs_vx.sum()
+-    #     # obs_rfft = np.fft.rfft(obs_state, norm = 'forward')
+-    #     # obs_rfft_mag = np.abs(obs_rfft)
+-
+-    #     # target_rfft_mag = np.zeros_like(obs_rfft_mag)
+-    #     # target_rfft_mag[0] = 0.5
+-    #     # target_rfft_mag[2] = 0.02
+-
+-    #     # diff = target_rfft_mag - obs_rfft_mag
+-    #     # mse = diff.dot(diff)
+-
+-    #     # b1 = 1
+-    #     # a1 = 10000
+-    #     # reward = b1*np.exp(-a1*mse)  
+-
+-    #     # action = obs['action_out']
+-    #     # reward = -action.dot(action)
+-
+-    #     return reward
+-
+-    def _calc_reward(self, obs ):
+-        obs_state = obs['observation'] 
+-        obs_int = obs_state[:self._bins] 
+-
+-        obs_rfft = np.fft.rfft(obs_int, norm = 'forward')
+-        obs_rfft_mag = np.abs(obs_rfft)
+-
+-        target_rfft_mag = np.zeros_like(obs_rfft_mag)
+-        target_rfft_mag[0] = 0.5
+-        target_rfft_mag[2] = 0.02
+-
+-        diff = target_rfft_mag - obs_rfft_mag
+-        mse = diff.dot(diff)
+-        # print('mse - ', mse)
+-
+-        b1 = 1
+-        a1 = 10000
+-        reward = b1*np.exp(-a1*mse)  
+-        # print(mse,reward)
+-
+-        # action = obs['action_out']
+-        # reward = -action.dot(action)
+-
+-        return reward
+\ No newline at end of file

@@ -21,7 +21,7 @@ def animate_frames(data):
     plt.show()
 
 
-data = np.load('data/data_a_08.npy')[:1000,:]
+data = np.load('data/data_a_05.npy')[:1000,:]
 print(data.shape,data.min(),data.max())
 
 animate_frames(data)
